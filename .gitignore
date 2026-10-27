@@ -6,3 +6,10 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# YOLO model weights
+yolo11n.pt
+
+# Generated outputs
+outputs/
+runs/
