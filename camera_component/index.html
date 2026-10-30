@@ -1,0 +1,162 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 10px;
+        }
+
+        video {
+            width: 100%;
+            max-width: 600px;
+            border-radius: 12px;
+            transform: scaleX(1);
+            background: #222;
+        }
+
+        button {
+            padding: 12px 20px;
+            margin: 8px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background: #2563eb;
+            color: white;
+            font-size: 15px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin: 10px;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h3>📷 Visual Intelligence Camera</h3>
+
+    <video id="video" autoplay playsinline></video>
+
+    <div>
+        <button id="start">Open Camera</button>
+        <button id="capture" disabled>Capture Photo</button>
+        <button id="close" disabled>Close Camera</button>
+    </div>
+
+    <p id="status">Camera is closed.</p>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const status = document.getElementById("status");
+
+        const startBtn = document.getElementById("start");
+        const captureBtn = document.getElementById("capture");
+        const closeBtn = document.getElementById("close");
+
+        let stream = null;
+
+        function sendToStreamlit(value) {
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: "streamlit:setComponentValue",
+                value: value
+            }, "*");
+        }
+
+        function setHeight() {
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: "streamlit:setFrameHeight",
+                height: document.body.scrollHeight
+            }, "*");
+        }
+
+        async function openCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: "user"
+                    },
+                    audio: false
+                });
+
+                video.srcObject = stream;
+
+                await video.play();
+
+                startBtn.disabled = true;
+                captureBtn.disabled = false;
+                closeBtn.disabled = false;
+
+                status.textContent = "Camera is ready!";
+                setHeight();
+
+            } catch (error) {
+                status.textContent =
+                    "Camera error: " + error.message;
+            }
+        }
+
+        function capturePhoto() {
+            if (!stream || !video.videoWidth) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            const context = canvas.getContext("2d");
+
+            // Keep the captured photo non-mirrored.
+            context.drawImage(
+                video,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
+
+            const photo = canvas.toDataURL("image/jpeg", 0.9);
+
+            sendToStreamlit(photo);
+
+            status.textContent = "Photo captured successfully!";
+        }
+
+        function closeCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            video.srcObject = null;
+
+            startBtn.disabled = false;
+            captureBtn.disabled = true;
+            closeBtn.disabled = true;
+
+            status.textContent = "Camera is closed.";
+        }
+
+        startBtn.addEventListener("click", openCamera);
+        captureBtn.addEventListener("click", capturePhoto);
+        closeBtn.addEventListener("click", closeCamera);
+
+        window.addEventListener("beforeunload", closeCamera);
+
+        setHeight();
+    </script>
+
+</body>
+</html>
