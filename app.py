@@ -6,6 +6,9 @@ import open_clip
 import streamlit as st
 import torch
 from PIL import Image
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
+import av
+import threading
 
 st.set_page_config(
     page_title="Visual Intelligence Search",
@@ -69,6 +72,25 @@ def show_results(scores, title):
                 st.warning(f"Image not found: {path}")
 
 
+
+class CameraProcessor(VideoProcessorBase):
+
+    def __init__(self):
+        self.frame = None
+        self.lock = threading.Lock()
+
+    def recv(self, frame):
+        image = frame.to_ndarray(format="bgr24")
+
+        with self.lock:
+            self.frame = image.copy()
+
+        return av.VideoFrame.from_ndarray(
+            image,
+            format="bgr24"
+        )
+
+
 # Text-based search
 if st.button("Search", type="primary"):
     if not query.strip():
@@ -90,28 +112,104 @@ if st.button("Search", type="primary"):
         show_results(scores, f"Top results for: {query}")
 
 
+
+
 # Webcam image search
 st.divider()
-st.subheader("📷 Search using your camera")
+st.subheader("📷 Camera Search")
 
-camera_photo = st.camera_input("Take a photo")
+if "show_camera" not in st.session_state:
+    st.session_state.show_camera = False
 
-if camera_photo is not None:
-    image = Image.open(camera_photo).convert("RGB")
-    st.image(image, caption="Captured photo", width=350)
+if "camera_image" not in st.session_state:
+    st.session_state.camera_image = None
 
-    if st.button("Find similar images", type="primary"):
-        with st.spinner("Finding similar images with CLIP..."):
-            image_tensor = preprocess(image).unsqueeze(0)
+# Open / Close camera
+if st.button(
+    "📷 Open Camera" if not st.session_state.show_camera
+    else "Close Camera"
+):
+    st.session_state.show_camera = not st.session_state.show_camera
+    st.session_state.camera_image = None
+    st.rerun()
 
-            with torch.no_grad():
-                image_features = model.encode_image(image_tensor)
-                image_features /= image_features.norm(
-                    dim=-1, keepdim=True
+if st.session_state.show_camera:
+
+    ctx = webrtc_streamer(
+    key="visual-intelligence-camera",
+    mode=WebRtcMode.SENDRECV,
+    video_processor_factory=CameraProcessor,
+    media_stream_constraints={
+        "video": {"facingMode": "user"},
+        "audio": False
+    },
+    video_html_attrs={
+        "autoPlay": True,
+        "playsInline": True,
+        "muted": True,
+        "controls": False,
+        "style": {
+            "width": "100%",
+            "height": "auto",
+            "transform": "scaleX(-1)"
+        }
+    }
+)
+
+    # Capture photo
+    if st.button("📸 Capture Photo"):
+
+        if ctx.video_processor is not None:
+
+            with ctx.video_processor.lock:
+                frame = (
+                    ctx.video_processor.frame.copy()
+                    if ctx.video_processor.frame is not None
+                    else None
                 )
 
-            scores = (
-                embeddings @ image_features.cpu().numpy().T
-            ).flatten()
+            if frame is not None:
+                rgb_image = frame[:, :, ::-1].copy()
+                st.session_state.camera_image = Image.fromarray(
+                    rgb_image
+                )
+            else:
+                st.warning("Camera frame is not ready yet.")
 
-        show_results(scores, "Top matches for your photo")
+        else:
+            st.warning("Please start the camera first.")
+
+    # Show captured photo
+    if st.session_state.camera_image is not None:
+
+        st.image(
+            st.session_state.camera_image,
+            caption="Captured Photo",
+            width=350
+        )
+
+        # CLIP image search
+        if st.button("🔍 Find Similar Images"):
+
+            with st.spinner("Finding similar images with CLIP..."):
+
+                image_tensor = preprocess(
+                    st.session_state.camera_image
+                ).unsqueeze(0)
+
+                with torch.no_grad():
+                    image_features = model.encode_image(image_tensor)
+
+                    image_features /= image_features.norm(
+                        dim=-1,
+                        keepdim=True
+                    )
+
+                scores = (
+                    embeddings @ image_features.cpu().numpy().T
+                ).flatten()
+
+            show_results(
+                scores,
+                "Top matches for your camera photo"
+            )
