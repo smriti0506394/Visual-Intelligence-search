@@ -1,3 +1,4 @@
+import cv2
 from pathlib import Path
 import threading
 
@@ -329,16 +330,21 @@ class CameraProcessor(VideoProcessorBase):
         self.lock = threading.Lock()
 
         self.yolo_model = YOLO("yolo11n.pt")
-
         self.confidence = 0.25
-        self.last_annotated = None
+
         self.frame_count = 0
+        self.detections = []
 
     def recv(self, frame):
 
         image = frame.to_ndarray(format="bgr24")
 
-        # Keep original frame for photo capture
+        # Check actual camera resolution
+        print("Camera resolution:", image.shape)
+
+        # Correct camera orientation
+        image = np.fliplr(image).copy()
+
         with self.lock:
             self.frame = image.copy()
 
@@ -346,11 +352,12 @@ class CameraProcessor(VideoProcessorBase):
 
             self.frame_count += 1
 
-            if self.frame_count % 2 == 0 or self.last_annotated is None:
+            # Run YOLO every 4 frames
+            if self.frame_count % 4 == 0:
 
                 results = self.yolo_model.predict(
                     source=image,
-                    imgsz=640,
+                    imgsz=416,
                     conf=self.confidence,
                     device="cpu",
                     verbose=False
@@ -358,54 +365,53 @@ class CameraProcessor(VideoProcessorBase):
 
                 result = results[0]
 
-                # Flip original image for normal live preview
-                flipped = cv2.flip(image, 1)
+                self.detections = []
 
-                # Draw YOLO boxes and readable labels on flipped image
-                for box in result.boxes:
+                if result.boxes is not None:
 
-                    x1, y1, x2, y2 = map(
-                        int, box.xyxy[0].tolist()
-                    )
+                    for box in result.boxes:
 
-                    width = image.shape[1]
+                        x1, y1, x2, y2 = map(
+                            int, box.xyxy[0].tolist()
+                        )
 
-                    # Convert bounding box coordinates
-                    x1, x2 = width - x2, width - x1
+                        class_id = int(box.cls[0].item())
+                        name = result.names[class_id]
+                        score = float(box.conf[0].item())
 
-                    class_id = int(box.cls[0].item())
-                    confidence = float(box.conf[0].item())
-                    label = (
-                        f"{result.names[class_id]} "
-                        f"{confidence:.2f}"
-                    )
+                        self.detections.append(
+                            (x1, y1, x2, y2, name, score)
+                        )
 
-                    cv2.rectangle(
-                        flipped,
-                        (x1, y1),
-                        (x2, y2),
-                        (0, 255, 0),
-                        2
-                    )
+            # Draw latest detections on current frame
+            output = image.copy()
 
-                    cv2.putText(
-                        flipped,
-                        label,
-                        (x1, max(y1 - 10, 20)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 255, 0),
-                        2
-                    )
+            for x1, y1, x2, y2, name, score in self.detections:
 
-                self.last_annotated = flipped
+                cv2.rectangle(
+                    output,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
+                )
 
-            output = self.last_annotated
+                label = f"{name} {score:.0%}"
+
+                cv2.putText(
+                    output,
+                    label,
+                    (x1, max(y1 - 10, 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2
+                )
 
         except Exception as exc:
 
-            print(f"YOLO live detection error: {exc}")
-            output = cv2.flip(image, 1)
+            print("Detection error:", exc)
+            output = image
 
         return av.VideoFrame.from_ndarray(
             output,
@@ -449,13 +455,20 @@ if st.button(
 if st.session_state.show_camera:
 
     ctx = webrtc_streamer(
-        key="visual-intelligence-camera",
-        mode=WebRtcMode.SENDRECV,
+        key="camera",
         video_processor_factory=CameraProcessor,
+
         media_stream_constraints={
-            "video": {"facingMode": "user"},
-            "audio": False
-        },
+    "video": {
+        "width": {"exact": 1280},
+        "height": {"exact": 720},
+        "frameRate": {"ideal": 30}
+    },
+    "audio": False
+},
+
+        async_processing=True,
+
         video_html_attrs={
             "autoPlay": True,
             "playsInline": True,
@@ -470,7 +483,6 @@ if st.session_state.show_camera:
     )
 
     st.session_state.camera_started = ctx.state.playing
-
   # ---------------- CAPTURE CAMERA PHOTO ----------------
 
 if st.button(
