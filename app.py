@@ -6,6 +6,7 @@ import numpy as np
 import open_clip
 import streamlit as st
 import torch
+import cv2
 
 from PIL import Image
 from ultralytics import YOLO
@@ -219,7 +220,6 @@ def detect_objects(image, title, confidence):
         st.error(f"YOLO detection failed: {exc}")
 
 
-# ---------------- TEXT-BASED CLIP SEARCH ----------------
 
 # ---------------- TEXT-BASED CLIP SEARCH ----------------
 
@@ -320,6 +320,7 @@ if uploaded_image is not None:
 
 # ---------------- LIVE CAMERA PROCESSOR ----------------
 
+
 class CameraProcessor(VideoProcessorBase):
 
     def __init__(self):
@@ -327,14 +328,10 @@ class CameraProcessor(VideoProcessorBase):
         self.frame = None
         self.lock = threading.Lock()
 
-        # Load YOLO once when the webcam processor starts
         self.yolo_model = YOLO("yolo11n.pt")
 
         self.confidence = 0.25
-
-        # Store the most recent annotated frame
         self.last_annotated = None
-
         self.frame_count = 0
 
     def recv(self, frame):
@@ -349,7 +346,6 @@ class CameraProcessor(VideoProcessorBase):
 
             self.frame_count += 1
 
-            # Run YOLO on every second frame to reduce CPU load
             if self.frame_count % 2 == 0 or self.last_annotated is None:
 
                 results = self.yolo_model.predict(
@@ -362,19 +358,60 @@ class CameraProcessor(VideoProcessorBase):
 
                 result = results[0]
 
-                # Draw bounding boxes, labels and confidence
-                self.last_annotated = result.plot()
+                # Flip original image for normal live preview
+                flipped = cv2.flip(image, 1)
 
-            # Display the annotated live frame
+                # Draw YOLO boxes and readable labels on flipped image
+                for box in result.boxes:
+
+                    x1, y1, x2, y2 = map(
+                        int, box.xyxy[0].tolist()
+                    )
+
+                    width = image.shape[1]
+
+                    # Convert bounding box coordinates
+                    x1, x2 = width - x2, width - x1
+
+                    class_id = int(box.cls[0].item())
+                    confidence = float(box.conf[0].item())
+                    label = (
+                        f"{result.names[class_id]} "
+                        f"{confidence:.2f}"
+                    )
+
+                    cv2.rectangle(
+                        flipped,
+                        (x1, y1),
+                        (x2, y2),
+                        (0, 255, 0),
+                        2
+                    )
+
+                    cv2.putText(
+                        flipped,
+                        label,
+                        (x1, max(y1 - 10, 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0),
+                        2
+                    )
+
+                self.last_annotated = flipped
+
             output = self.last_annotated
 
-        except Exception:
-            output = image
+        except Exception as exc:
+
+            print(f"YOLO live detection error: {exc}")
+            output = cv2.flip(image, 1)
 
         return av.VideoFrame.from_ndarray(
             output,
             format="bgr24"
         )
+
 
 
 # ---------------- WEBCAM CAMERA SEARCH ----------------
@@ -427,7 +464,7 @@ if st.session_state.show_camera:
             "style": {
                 "width": "100%",
                 "height": "auto",
-                "transform": "none"
+                "transform": "scaleX(1)"
             }
         }
     )
